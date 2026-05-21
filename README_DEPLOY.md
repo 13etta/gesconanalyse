@@ -1,15 +1,18 @@
-# Backend Render — LOFSelect × Gescon
+# LOFSelect Gescon Action V2 corrigée
 
-Créer un **Web Service**, pas un Static Site.
+Correction incluse :
+- suppression du doublon `_search_with_serpapi`
+- ajout de `_search_with_duckduckgo`
+- `_canonical_lofselect_url` plus tolérant
+- sécurité : pas d’extraction directe sur un slug faible confidence 0.20
 
-Build command:
-`pip install -r requirements.txt`
+## Render
+Build command: `pip install -r requirements.txt`
 
-Start command:
-`uvicorn main:app --host 0.0.0.0 --port $PORT`
+Start command: `uvicorn main:app --host 0.0.0.0 --port $PORT`
 
-Environment variable:
-`ACTION_API_KEY=ta-cle-secrete`
+Variables : `ACTION_API_KEY`, `SERPAPI_API_KEY`, `PYTHON_VERSION=3.12.8`
 
-Tester:
-`https://TON-SERVICE.onrender.com/health`
+Après push : Render → Manual Deploy → Clear build cache & deploy.
+
+Tests : `/health`, `/debug/config`, `/lofselect/find-url`

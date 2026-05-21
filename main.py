@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import os, re, unicodedata, requests
 from bs4 import BeautifulSoup
 
@@ -159,7 +159,6 @@ def reconcile(req: ReconcileRequest, x_api_key: Optional[str] = Header(default=N
 # ============================================================
 
 from urllib.parse import quote_plus, urlparse, parse_qs, unquote
-from typing import List
 
 class FindUrlRequest(BaseModel):
     nom_chien: str
@@ -198,7 +197,7 @@ def _canonical_lofselect_url(url: str) -> str:
     if not url:
         return ""
 
-    url = url.strip()
+    url = str(url).strip()
 
     # Décoder les liens DuckDuckGo du type /l/?uddg=https%3A...
     if "uddg=" in url:
@@ -212,11 +211,19 @@ def _canonical_lofselect_url(url: str) -> str:
     url = re.sub(r"/production/?$", "", url)
 
     m = re.search(
-        r"https?://www\.centrale-canine\.fr/lofselect/chien/[^/\s]+",
+        r"https?://(?:www\.)?centrale-canine\.fr/lofselect/chien/[^/\s]+",
         url
     )
-    return m.group(0) if m else ""
 
+    if not m:
+        return ""
+
+    ident = m.group(0)
+    ident = ident.replace("http://www.centrale-canine.fr", "https://www.centrale-canine.fr")
+    ident = ident.replace("https://centrale-canine.fr", "https://www.centrale-canine.fr")
+    ident = ident.replace("http://centrale-canine.fr", "https://www.centrale-canine.fr")
+
+    return ident
 
 def _candidate_from_url(nom_chien: str, url: str, confidence: float, source: str, note: str = ""):
     ident = _canonical_lofselect_url(url)
@@ -231,52 +238,6 @@ def _candidate_from_url(nom_chien: str, url: str, confidence: float, source: str
         source=source,
         note=note
     )
-
-
-def _search_with_serpapi(nom_chien: str, max_results: int):
-    """
-    Recherche fiable si tu ajoutes SERPAPI_API_KEY dans Render.
-    Sinon cette fonction est ignorée.
-    """
-    key = os.getenv("SERPAPI_API_KEY", "").strip()
-
-    if not key:
-        return [], ["SERPAPI_API_KEY absente : recherche SerpAPI ignorée."]
-
-    query = f'site:centrale-canine.fr/lofselect/chien "{nom_chien}"'
-
-    try:
-        r = requests.get(
-            "https://serpapi.com/search.json",
-            params={
-                "engine": "google",
-                "q": query,
-                "api_key": key,
-                "num": max_results
-            },
-            timeout=25
-        )
-        r.raise_for_status()
-        data = r.json()
-    except Exception as e:
-        return [], [f"Erreur SerpAPI : {e}"]
-
-    candidates = []
-
-    for item in data.get("organic_results", [])[:max_results]:
-        link = item.get("link", "")
-        title = item.get("title", "")
-        cand = _candidate_from_url(
-            nom_chien,
-            link,
-            0.95,
-            "serpapi_google",
-            title
-        )
-        if cand:
-            candidates.append(cand)
-
-    return candidates, []
 
 
 def _search_with_serpapi(nom_chien: str, max_results: int):
@@ -304,32 +265,48 @@ def _search_with_serpapi(nom_chien: str, max_results: int):
                     "engine": "google",
                     "q": query,
                     "api_key": key,
-                    "num": max_results
+                    "num": max_results,
                 },
-                timeout=25
+                timeout=25,
             )
             r.raise_for_status()
             data = r.json()
         except Exception as e:
-            warnings.append(f"Erreur SerpAPI pour requête {query}: {e}")
+            warnings.append(f"Erreur SerpAPI pour requête [{query}] : {repr(e)}")
+            continue
+
+        if not isinstance(data, dict):
+            warnings.append(f"Réponse SerpAPI non exploitable pour [{query}]")
             continue
 
         if data.get("error"):
-            warnings.append(f"Erreur SerpAPI : {data.get('error')}")
+            warnings.append(f"Erreur SerpAPI pour [{query}] : {data.get('error')}")
             continue
 
-        for item in data.get("organic_results", [])[:max_results]:
-            link = item.get("link", "")
-            title = item.get("title", "")
-            snippet = item.get("snippet", "")
+        organic = data.get("organic_results") or []
+        if not organic:
+            warnings.append(f"Aucun organic_result SerpAPI pour [{query}]")
+            continue
 
-            cand = _candidate_from_url(
-                nom_chien,
-                link,
-                0.95,
-                "serpapi_google",
-                f"{title} | {snippet}"
-            )
+        for item in organic[:max_results]:
+            if not isinstance(item, dict):
+                continue
+
+            link = item.get("link") or item.get("redirect_link") or ""
+            title = item.get("title") or ""
+            snippet = item.get("snippet") or ""
+
+            try:
+                cand = _candidate_from_url(
+                    nom_chien,
+                    link,
+                    0.95,
+                    "serpapi_google",
+                    f"{title} | {snippet}",
+                )
+            except Exception as e:
+                warnings.append(f"Erreur parsing candidat SerpAPI [{link}] : {repr(e)}")
+                continue
 
             if cand and cand.url_identite not in seen:
                 seen.add(cand.url_identite)
@@ -342,6 +319,60 @@ def _search_with_serpapi(nom_chien: str, max_results: int):
         warnings.append("SerpAPI active mais aucun résultat LOFSelect vérifié trouvé.")
 
     return candidates[:max_results], warnings
+
+
+def _search_with_duckduckgo(nom_chien: str, max_results: int):
+    """
+    Fallback gratuit si SerpAPI ne trouve rien.
+    """
+    query = f'site:centrale-canine.fr/lofselect/chien "{nom_chien}"'
+    search_url = "https://duckduckgo.com/html/?q=" + quote_plus(query)
+
+    try:
+        r = requests.get(
+            search_url,
+            headers={"User-Agent": "Mozilla/5.0 SetterStatsBot"},
+            timeout=25,
+        )
+        r.raise_for_status()
+    except Exception as e:
+        return [], [f"Erreur DuckDuckGo : {repr(e)}"]
+
+    soup = BeautifulSoup(r.text, "html.parser")
+    candidates = []
+    seen = set()
+
+    for a in soup.find_all("a", href=True):
+        href = a.get("href", "")
+
+        try:
+            ident = _canonical_lofselect_url(href)
+        except Exception:
+            continue
+
+        if not ident or ident in seen:
+            continue
+
+        seen.add(ident)
+
+        cand = _candidate_from_url(
+            nom_chien=nom_chien,
+            url=ident,
+            confidence=0.70,
+            source="duckduckgo_html",
+            note="Candidat trouvé par fallback DuckDuckGo ; vérifier l’homonymie.",
+        )
+
+        if cand:
+            candidates.append(cand)
+
+        if len(candidates) >= max_results:
+            break
+
+    if not candidates:
+        return [], ["DuckDuckGo actif mais aucun résultat LOFSelect vérifié trouvé."]
+
+    return candidates, []
 
 
 @app.post("/lofselect/find-url", response_model=FindUrlResponse)
@@ -427,6 +458,22 @@ def find_and_extract_lofselect(req: FindAndExtractRequest, x_api_key: Optional[s
         key=lambda c: c.confidence,
         reverse=True
     )[0]
+
+    # Sécurité : ne pas tenter une extraction sur un simple slug faible.
+    if best.confidence < 0.70:
+        return {
+            "nom_chien": req.nom_chien,
+            "selected_url": best.url_utilisations,
+            "selected_confidence": best.confidence,
+            "selected_source": best.source,
+            "candidates": [c.model_dump() for c in found.candidates],
+            "status": "url_not_verified",
+            "warnings": found.warnings + [
+                "URL non vérifiée : extraction directe non tentée. Fournir l’URL exacte ou copier-coller le texte LOFSelect."
+            ],
+            "rows": [],
+            "summary": {},
+        }
 
     try:
         extracted = extract_url(
