@@ -442,3 +442,14 @@ def find_and_extract_lofselect(req: FindAndExtractRequest, x_api_key: Optional[s
                 "URL trouvée mais extraction directe impossible. Copier-coller le texte LOFSelect et utiliser parseLofselectText."
             ]
         }
+@app.get("/debug/config")
+def debug_config():
+    serp_key = os.getenv("SERPAPI_API_KEY", "").strip()
+    action_key = os.getenv("ACTION_API_KEY", "").strip()
+
+    return {
+        "serpapi_key_present": bool(serp_key),
+        "serpapi_key_length": len(serp_key),
+        "action_key_present": bool(action_key),
+        "action_key_length": len(action_key)
+    }
