@@ -279,51 +279,69 @@ def _search_with_serpapi(nom_chien: str, max_results: int):
     return candidates, []
 
 
-def _search_with_duckduckgo(nom_chien: str, max_results: int):
-    """
-    Fallback gratuit. Moins fiable que SerpAPI, mais utile.
-    """
-    query = f'site:centrale-canine.fr/lofselect/chien "{nom_chien}"'
-    url = "https://duckduckgo.com/html/?q=" + quote_plus(query)
+def _search_with_serpapi(nom_chien: str, max_results: int):
+    key = os.getenv("SERPAPI_API_KEY", "").strip()
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 SetterStatsBot"
-    }
+    if not key:
+        return [], ["SERPAPI_API_KEY absente : recherche SerpAPI ignorée."]
 
-    try:
-        r = requests.get(url, headers=headers, timeout=25)
-        r.raise_for_status()
-    except Exception as e:
-        return [], [f"Erreur DuckDuckGo : {e}"]
+    queries = [
+        f'site:centrale-canine.fr/lofselect/chien "{nom_chien}"',
+        f'"{nom_chien}" "LOFSelect"',
+        f'"{nom_chien}" "centrale-canine"',
+        f'{nom_chien} centrale canine lofselect',
+    ]
 
-    soup = BeautifulSoup(r.text, "html.parser")
     candidates = []
+    warnings = []
     seen = set()
 
-    for a in soup.find_all("a", href=True):
-        href = a.get("href", "")
-        ident = _canonical_lofselect_url(href)
-
-        if not ident or ident in seen:
+    for query in queries:
+        try:
+            r = requests.get(
+                "https://serpapi.com/search.json",
+                params={
+                    "engine": "google",
+                    "q": query,
+                    "api_key": key,
+                    "num": max_results
+                },
+                timeout=25
+            )
+            r.raise_for_status()
+            data = r.json()
+        except Exception as e:
+            warnings.append(f"Erreur SerpAPI pour requête {query}: {e}")
             continue
 
-        seen.add(ident)
+        if data.get("error"):
+            warnings.append(f"Erreur SerpAPI : {data.get('error')}")
+            continue
 
-        cand = _candidate_from_url(
-            nom_chien,
-            ident,
-            0.70,
-            "duckduckgo_html",
-            "Candidat trouvé par recherche web gratuite ; vérifier l’homonymie."
-        )
+        for item in data.get("organic_results", [])[:max_results]:
+            link = item.get("link", "")
+            title = item.get("title", "")
+            snippet = item.get("snippet", "")
 
-        if cand:
-            candidates.append(cand)
+            cand = _candidate_from_url(
+                nom_chien,
+                link,
+                0.95,
+                "serpapi_google",
+                f"{title} | {snippet}"
+            )
 
-        if len(candidates) >= max_results:
+            if cand and cand.url_identite not in seen:
+                seen.add(cand.url_identite)
+                candidates.append(cand)
+
+        if candidates:
             break
 
-    return candidates, []
+    if not candidates:
+        warnings.append("SerpAPI active mais aucun résultat LOFSelect vérifié trouvé.")
+
+    return candidates[:max_results], warnings
 
 
 @app.post("/lofselect/find-url", response_model=FindUrlResponse)
