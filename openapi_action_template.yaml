@@ -1,0 +1,76 @@
+openapi: 3.1.0
+info:
+  title: LOFSelect Gescon Setter Anglais Action
+  version: "1.0.0"
+  description: Action pour parser LOFSelect et réconcilier avec Gescon V6.
+servers:
+  - url: https://REMPLACE-PAR-TON-SERVICE.onrender.com
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+  schemas:
+    ParseTextRequest:
+      type: object
+      required: [nom_chien, raw_text]
+      properties:
+        nom_chien: {type: string}
+        raw_text: {type: string}
+        source_url: {type: string}
+    ExtractUrlRequest:
+      type: object
+      required: [url]
+      properties:
+        url: {type: string}
+        nom_chien: {type: string}
+    ReconcileRequest:
+      type: object
+      required: [nom_chien, gescon_summary, lofselect_summary]
+      properties:
+        nom_chien: {type: string}
+        gescon_summary: {type: object, additionalProperties: true}
+        lofselect_summary: {type: object, additionalProperties: true}
+security:
+  - ApiKeyAuth: []
+paths:
+  /health:
+    get:
+      operationId: health
+      summary: Tester l’API
+      responses:
+        "200": {description: API active}
+  /lofselect/parse-text:
+    post:
+      operationId: parseLofselectText
+      summary: Parser le texte copié depuis LOFSelect
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ParseTextRequest"}
+      responses:
+        "200": {description: Utilisations extraites}
+  /lofselect/extract-url:
+    post:
+      operationId: extractLofselectUrl
+      summary: Extraire les utilisations depuis une URL LOFSelect
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ExtractUrlRequest"}
+      responses:
+        "200": {description: Utilisations extraites}
+  /reconcile/chien:
+    post:
+      operationId: reconcileChien
+      summary: Réconcilier les compteurs Gescon et LOFSelect
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ReconcileRequest"}
+      responses:
+        "200": {description: Statut de réconciliation}
