@@ -1,0 +1,68 @@
+name: Download Gescon Archives Single Range
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: "Date de début"
+        required: true
+        default: "2014-08-01"
+      end_date:
+        description: "Date de fin"
+        required: true
+        default: "2026-05-29"
+      mode:
+        description: "Mode extraction"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - all
+          - britanniques
+          - continentaux
+
+jobs:
+  download-gescon:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements_gescon.txt
+          python -m playwright install chromium
+
+      - name: Run Gescon extraction
+        run: |
+          mkdir -p output pdfs
+          python scripts/gescon_archive_downloader.py \
+            --start "${{ inputs.start_date }}" \
+            --end "${{ inputs.end_date }}" \
+            --out output \
+            --pdf-dir pdfs \
+            --mode "${{ inputs.mode }}"
+
+      - name: Scan GUINUT if continentaux or all
+        if: ${{ inputs.mode == 'continentaux' || inputs.mode == 'all' }}
+        run: |
+          python scripts/recherche_guinut_gescon.py --pdf-dir pdfs --out output_guinut
+
+      - name: Compress output
+        run: |
+          zip -r gescon_archive_${{ inputs.start_date }}_${{ inputs.end_date }}_${{ inputs.mode }}.zip output pdfs output_guinut || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gescon_archive_${{ inputs.start_date }}_${{ inputs.end_date }}_${{ inputs.mode }}
+          path: gescon_archive_${{ inputs.start_date }}_${{ inputs.end_date }}_${{ inputs.mode }}.zip
+          retention-days: 7

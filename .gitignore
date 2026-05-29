@@ -1,0 +1,10 @@
+pdfs/
+pdfs_*/
+output/
+output_*/
+output_guinut/
+output_guinut_*/
+*.zip
+__pycache__/
+*.pyc
+.env

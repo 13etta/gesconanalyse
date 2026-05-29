@@ -1,0 +1,88 @@
+name: Download Gescon Archives By Year
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Mode extraction"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - all
+          - britanniques
+          - continentaux
+      end_2026:
+        description: "Date de fin pour 2026"
+        required: true
+        default: "2026-05-29"
+
+jobs:
+  download-gescon:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    strategy:
+      fail-fast: false
+      matrix:
+        year: [2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements_gescon.txt
+          python -m playwright install chromium
+
+      - name: Define date range
+        run: |
+          if [ "${{ matrix.year }}" = "2014" ]; then
+            echo "START_DATE=2014-08-01" >> $GITHUB_ENV
+          else
+            echo "START_DATE=${{ matrix.year }}-01-01" >> $GITHUB_ENV
+          fi
+
+          if [ "${{ matrix.year }}" = "2026" ]; then
+            echo "END_DATE=${{ inputs.end_2026 }}" >> $GITHUB_ENV
+          else
+            echo "END_DATE=${{ matrix.year }}-12-31" >> $GITHUB_ENV
+          fi
+
+      - name: Run Gescon extraction
+        run: |
+          mkdir -p output_${{ matrix.year }} pdfs_${{ matrix.year }}
+          python scripts/gescon_archive_downloader.py \
+            --start "$START_DATE" \
+            --end "$END_DATE" \
+            --out output_${{ matrix.year }} \
+            --pdf-dir pdfs_${{ matrix.year }} \
+            --mode "${{ inputs.mode }}"
+
+      - name: Scan GUINUT if continentaux or all
+        if: ${{ inputs.mode == 'continentaux' || inputs.mode == 'all' }}
+        run: |
+          python scripts/recherche_guinut_gescon.py \
+            --pdf-dir pdfs_${{ matrix.year }} \
+            --out output_guinut_${{ matrix.year }}
+
+      - name: Compress year output
+        run: |
+          zip -r gescon_${{ matrix.year }}_${{ inputs.mode }}.zip \
+            output_${{ matrix.year }} \
+            pdfs_${{ matrix.year }} \
+            output_guinut_${{ matrix.year }} || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gescon_${{ matrix.year }}_${{ inputs.mode }}
+          path: gescon_${{ matrix.year }}_${{ inputs.mode }}.zip
+          retention-days: 7
